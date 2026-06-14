@@ -1,0 +1,55 @@
+# Generic engine — Bill of Lading schema.
+# This file is the contract the Extractor agent is held to. The 8 fields listed
+# are the take-home brief's required set. Add more fields here without code
+# changes — the engine is field-agnostic.
+
+doc_type: bill_of_lading
+version: 1
+fields:
+  - id: consignee_name
+    label: Consignee
+    type: string
+    required: true
+    hint: "Receiver of the shipment. Usually appears in a labelled box near the top of the BoL."
+
+  - id: hs_code
+    label: HS Code
+    type: string
+    required: true
+    hint: "Harmonised System code, often 6–10 digits with a period. e.g. 8471.30 or 8517.62.00"
+
+  - id: port_of_loading
+    label: Port of Loading
+    type: string
+    required: true
+    hint: "Origin port. Look for 'Port of Loading' or 'POL'."
+
+  - id: port_of_discharge
+    label: Port of Discharge
+    type: string
+    required: true
+    hint: "Destination port. Look for 'Port of Discharge' or 'POD'."
+
+  - id: incoterms
+    label: Incoterms
+    type: string
+    required: true
+    hint: "Three-letter code (e.g. FOB, CIF, EXW, DAP) usually followed by a place."
+
+  - id: description_of_goods
+    label: Description of Goods
+    type: string
+    required: true
+    hint: "Free-text description, often in a wide box. Capture the gist."
+
+  - id: gross_weight
+    label: Gross Weight
+    type: string
+    required: true
+    hint: "Total weight including packaging, with unit. e.g. '1240.5 KG' or '1.24 MT'."
+
+  - id: invoice_number
+    label: Invoice Number
+    type: string
+    required: true
+    hint: "Commercial invoice reference, often prefixed like 'INV-' or 'CI-'."

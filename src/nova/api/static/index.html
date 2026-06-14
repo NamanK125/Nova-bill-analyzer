@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nova trade-doc — prototype</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; }
+    .running { animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen">
+
+<header class="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+  <div>
+    <div class="text-xs uppercase tracking-wider text-slate-400">GoComet · Nova</div>
+    <div class="text-lg font-semibold">Trade-doc validation — prototype</div>
+  </div>
+  <div class="text-xs text-slate-400">A · Extractor → B · Validator → C · Router → D · Query → E · UI</div>
+</header>
+
+<main class="p-4">
+
+  <!-- ── what is this ────────────────────────────────────────────────── -->
+  <section id="explainer" class="max-w-3xl mx-auto mb-4 bg-white rounded shadow p-6">
+    <h2 class="text-sm uppercase tracking-wider text-slate-500 mb-2">What you're looking at</h2>
+    <p class="text-sm text-slate-700 leading-relaxed">
+      A 3-agent pipeline that turns a Bill of Lading PDF into an auto-approve / human-review decision,
+      governed by per-customer rules. The architecture maps to Nova's 5-stage runtime
+      (scope resolution → context compilation → schema routing → plan+execute → evidence delivery).
+      Pick a sample below; the right panel will fill in as each stage completes.
+    </p>
+    <details class="mt-3 text-xs text-slate-600">
+      <summary class="cursor-pointer text-slate-500 hover:text-slate-700">How the three agents work →</summary>
+      <ul class="mt-2 space-y-1 pl-4 list-disc">
+        <li><b>A · Extractor</b> — multimodal VLM call. Pulls 8 fields out of the PDF.
+          For every field it must produce a quote + a confidence. Quotes are
+          fuzzy-matched against the PDF text layer; missing/weak matches demote
+          the confidence. When there's no text layer (scanned doc) the system
+          caps every confidence at 0.90 so nothing slips past auto-approve.</li>
+        <li><b>B · Validator</b> — deterministic YAML rules per customer
+          (membership, regex, presence). Three-valued status:
+          <span class="mono">match</span> /
+          <span class="mono">mismatch</span> /
+          <span class="mono">uncertain</span>. Any field below the 0.95 accept
+          threshold is forced to <span class="mono">uncertain</span> regardless of the rule outcome — never silently approve.</li>
+        <li><b>C · Router</b> — decision matrix maps {match, mismatch, uncertain}×severity →
+          <span class="mono">auto_approve</span> / <span class="mono">human_review</span> /
+          <span class="mono">draft_amendment</span>. An LLM writes the operator-facing rationale; the decision itself is rule-bound.</li>
+      </ul>
+    </details>
+  </section>
+
+  <!-- ── upload / sample picker ─────────────────────────────────────── -->
+  <section id="picker" class="bg-white rounded shadow p-6 max-w-3xl mx-auto">
+    <h2 class="text-sm uppercase tracking-wider text-slate-500 mb-2">Pick a document</h2>
+    <p class="text-xs text-slate-500 mb-4">
+      Three synthetic samples drive the three router paths.
+      Click one — the PDF appears on the left, the pipeline streams stage-by-stage on the right.
+    </p>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+      <button data-sample="acme_bol_clean.pdf"
+              class="sample-btn text-left p-3 rounded border border-emerald-300 bg-emerald-50 hover:bg-emerald-100">
+        <div class="text-sm font-semibold text-emerald-800">Clean BoL</div>
+        <div class="text-xs text-emerald-700 mt-1">All 8 fields valid · all rules match</div>
+        <div class="text-[11px] mono text-emerald-900 mt-1">→ auto_approve</div>
+      </button>
+      <button data-sample="acme_bol_mismatch.pdf"
+              class="sample-btn text-left p-3 rounded border border-red-300 bg-red-50 hover:bg-red-100">
+        <div class="text-sm font-semibold text-red-800">Mismatch BoL</div>
+        <div class="text-xs text-red-700 mt-1">HS code 8471.30 — not in ACME's approved list</div>
+        <div class="text-[11px] mono text-red-900 mt-1">→ human_review (high severity)</div>
+      </button>
+      <button data-sample="acme_bol_uncertain.pdf"
+              class="sample-btn text-left p-3 rounded border border-amber-300 bg-amber-50 hover:bg-amber-100">
+        <div class="text-sm font-semibold text-amber-800">Uncertain BoL</div>
+        <div class="text-xs text-amber-700 mt-1">Gross weight redacted; scanned doc, no text layer</div>
+        <div class="text-[11px] mono text-amber-900 mt-1">→ human_review (8/8 uncertain)</div>
+      </button>
+    </div>
+    <div class="text-xs text-slate-400 mb-2">or upload your own BoL:</div>
+    <input type="file" id="file-input" accept="application/pdf" class="text-sm" />
+  </section>
+
+  <!-- ── live pipeline view (hidden until upload) ────────────────────── -->
+  <section id="pipeline" class="hidden grid grid-cols-1 lg:grid-cols-[55%_45%] gap-4 mt-4">
+
+    <!-- left: PDF preview -->
+    <div class="bg-white rounded shadow overflow-hidden flex flex-col h-[80vh]">
+      <div class="px-3 py-2 bg-slate-100 border-b text-xs text-slate-600 flex justify-between">
+        <span>source document</span>
+        <span id="hover-quote" class="mono text-amber-700"></span>
+      </div>
+      <iframe id="pdf-frame" class="flex-1 w-full bg-slate-100"></iframe>
+    </div>
+
+    <!-- right: live state panels -->
+    <div class="flex flex-col gap-4 overflow-y-auto h-[80vh] pr-2">
+
+      <!-- 5-stage strip -->
+      <div class="bg-white rounded shadow p-3">
+        <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Nova 5-stage pipeline</div>
+        <div id="stage-strip" class="flex gap-1 text-xs flex-wrap"></div>
+        <div class="mt-2 text-[11px] text-slate-500" id="meta-line"></div>
+        <div class="mt-1 text-[11px] text-slate-400">
+          Stages light up as each finishes. Cost & latency are summed from every model call in the run.
+        </div>
+      </div>
+
+      <!-- A · extraction -->
+      <div class="bg-white rounded shadow p-3">
+        <div class="text-xs uppercase tracking-wider text-slate-500 mb-1">A · Extracted fields</div>
+        <div class="text-[11px] text-slate-500 mb-2">
+          Hover a row to see the supporting quote from the PDF. Confidence bar:
+          <span class="text-emerald-700">green ≥ 0.95</span> ·
+          <span class="text-amber-700">amber 0.70–0.94</span> ·
+          <span class="text-red-700">red &lt; 0.70</span>.
+          Anything below 0.95 forces the rule to <span class="mono">uncertain</span> in panel B.
+        </div>
+        <table class="w-full text-sm"><tbody id="ex-tbody">
+          <tr><td class="py-3 text-slate-400 text-center" colspan="3">waiting…</td></tr>
+        </tbody></table>
+      </div>
+
+      <!-- B · validation -->
+      <div class="bg-white rounded shadow p-3">
+        <div class="text-xs uppercase tracking-wider text-slate-500 mb-1">B · Validation</div>
+        <div class="text-[11px] text-slate-500 mb-2">
+          Deterministic rules from <span class="mono">customers/acme/rules.yaml</span>.
+          <span class="mono">match</span> = passes;
+          <span class="mono">mismatch</span> = clearly fails;
+          <span class="mono">uncertain</span> = can't safely decide (low confidence or unreadable).
+        </div>
+        <ul id="val-list" class="space-y-2 text-sm">
+          <li class="text-slate-400">waiting…</li>
+        </ul>
+      </div>
+
+      <!-- C · decision -->
+      <div id="dec-card" class="hidden rounded shadow p-4 border">
+        <div class="text-xs uppercase tracking-wider mb-2">C · Decision</div>
+        <div id="dec-text" class="text-lg font-semibold uppercase mono"></div>
+        <p id="dec-rationale" class="mt-2 text-sm"></p>
+        <div id="dec-discrepancies" class="mt-3 text-xs hidden">
+          <div class="font-semibold mb-1">Discrepancies</div>
+          <ul id="dec-list" class="space-y-1"></ul>
+        </div>
+        <pre id="dec-amendment" class="hidden mt-3 text-xs bg-white border border-slate-200 p-3 rounded whitespace-pre-wrap"></pre>
+        <div class="mt-3 flex items-center gap-2 text-xs">
+          <button id="override-btn" class="px-2 py-1 bg-white border rounded hover:bg-slate-50">override</button>
+          <span class="text-[11px] text-slate-500">
+            Overrides are recorded with operator + rationale into the work-store —
+            they're the labelled data the next-version evaluator reads.
+          </span>
+        </div>
+      </div>
+
+      <!-- D · NL query -->
+      <div class="bg-white rounded shadow p-3">
+        <div class="text-xs uppercase tracking-wider text-slate-500 mb-1">D · Ask the work-store (NL→SQL)</div>
+        <div class="text-[11px] text-slate-500 mb-2">
+          Operator question → safe read-only SQL over the SQLite work-store
+          (<span class="mono">PRAGMA query_only=1</span>; only SELECT allowed).
+          Try: <span class="mono">how many shipments were flagged?</span> ·
+          <span class="mono">average extractor cost in USD</span> ·
+          <span class="mono">break down decisions by type</span>.
+        </div>
+        <div class="flex gap-2">
+          <input id="q-input" class="flex-1 border rounded px-2 py-1 text-sm"
+                 value="how many shipments were flagged this week?" />
+          <button id="q-btn" class="px-3 py-1 bg-slate-900 text-white text-sm rounded">ask</button>
+        </div>
+        <div id="q-err" class="hidden mt-2 text-xs text-red-700 mono"></div>
+        <div id="q-result" class="hidden mt-2 text-xs">
+          <div id="q-expl" class="text-slate-500 italic"></div>
+          <pre id="q-sql" class="mono bg-slate-50 p-2 rounded mt-1 overflow-x-auto"></pre>
+          <div id="q-answer" class="mt-2 font-semibold"></div>
+          <div id="q-rows-wrap" class="overflow-x-auto"><table class="w-full mt-1 text-[11px] mono">
+            <thead id="q-thead"></thead><tbody id="q-tbody"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+const STAGES = [
+  "scope_resolution", "context_compilation", "schema_routing",
+  "extractor", "validator", "router", "evidence_delivery",
+];
+const FIELDS = [
+  "consignee_name","hs_code","port_of_loading","port_of_discharge",
+  "incoterms","description_of_goods","gross_weight","invoice_number",
+];
+
+let currentDecisionId = null;
+let currentExtraction = null;
+
+// ── sample buttons ───────────────────────────────────────────────────
+document.querySelectorAll(".sample-btn").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const name = btn.getAttribute("data-sample");
+    const resp = await fetch("/samples/" + encodeURIComponent(name));
+    if (!resp.ok) { alert("sample not found — run `make samples` first"); return; }
+    const blob = await resp.blob();
+    const file = new File([blob], name, { type: "application/pdf" });
+    await uploadFile(file);
+  });
+});
+document.getElementById("file-input").addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  if (f) await uploadFile(f);
+});
+
+// ── upload + open WS ─────────────────────────────────────────────────
+async function uploadFile(file) {
+  resetUI();
+  document.getElementById("pdf-frame").src = URL.createObjectURL(file);
+  document.getElementById("pipeline").classList.remove("hidden");
+  document.getElementById("picker").classList.add("hidden");
+
+  const fd = new FormData();
+  fd.append("file", file);
+  const resp = await fetch("/shipments?customer_id=acme", { method: "POST", body: fd });
+  if (!resp.ok) { alert("upload failed"); return; }
+  const { shipment_id } = await resp.json();
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/shipments/${shipment_id}/ws`);
+  ws.onmessage = (m) => {
+    let ev; try { ev = JSON.parse(m.data); } catch { return; }
+    handleEvent(ev, shipment_id);
+  };
+  ws.onerror = (e) => console.error("ws error", e);
+}
+
+function resetUI() {
+  currentDecisionId = null; currentExtraction = null;
+  renderStrip({});
+  document.getElementById("ex-tbody").innerHTML =
+    `<tr><td class="py-3 text-slate-400 text-center" colspan="3">waiting…</td></tr>`;
+  document.getElementById("val-list").innerHTML =
+    `<li class="text-slate-400">waiting…</li>`;
+  document.getElementById("dec-card").classList.add("hidden");
+  document.getElementById("meta-line").textContent = "";
+}
+
+function handleEvent(ev, shipmentId) {
+  if (ev.type === "stage_event") {
+    bumpStrip(ev.stage, ev.status);
+  }
+  if (ev.type === "state") {
+    if (ev.extraction) renderExtraction(ev.extraction);
+    if (ev.validation) renderValidation(ev.validation);
+    if (ev.decision) renderDecision(ev.decision);
+    if (Array.isArray(ev.costs) && ev.costs.length) renderMeta(ev.costs);
+  }
+  if (ev.type === "final") {
+    fetch("/shipments/" + shipmentId).then(r => r.json()).then(s => {
+      if (s.extraction) renderExtraction(s.extraction);
+      if (s.validation) renderValidation(s.validation);
+      if (s.decision) renderDecision(s.decision);
+    });
+  }
+}
+
+// ── 5-stage strip ────────────────────────────────────────────────────
+const stripStatuses = {};
+function renderStrip() {
+  const el = document.getElementById("stage-strip");
+  el.innerHTML = "";
+  for (const s of STAGES) {
+    const status = stripStatuses[s] || "pending";
+    const span = document.createElement("span");
+    span.className = "px-2 py-1 rounded border " + ({
+      pending: "bg-slate-50 text-slate-400 border-slate-200",
+      running: "bg-amber-50 text-amber-700 border-amber-300 running",
+      ok:      "bg-emerald-50 text-emerald-700 border-emerald-300",
+      error:   "bg-red-50 text-red-700 border-red-300",
+    }[status]);
+    span.textContent = s;
+    el.appendChild(span);
+  }
+}
+function bumpStrip(stage, status) {
+  if (!stage) return;
+  const map = { started: "running", ok: "ok", error: "error" };
+  stripStatuses[stage] = map[status] || "pending";
+  renderStrip();
+}
+renderStrip();
+
+// ── A · extraction ───────────────────────────────────────────────────
+function renderExtraction(ex) {
+  currentExtraction = ex;
+  const body = document.getElementById("ex-tbody");
+  body.innerHTML = "";
+  for (const fid of FIELDS) {
+    const f = ex[fid] || {};
+    const conf = Number(f.confidence ?? 0);
+    const unread = (ex.unreadable_fields || []).includes(fid);
+    const cls = conf >= 0.95 ? "bg-emerald-500" : conf >= 0.7 ? "bg-amber-500" : "bg-red-500";
+    const row = document.createElement("tr");
+    row.className = "hover:bg-amber-50 border-b border-slate-100";
+    row.innerHTML = `
+      <td class="py-1.5 pr-3 text-slate-600 align-top w-44">${fid}</td>
+      <td class="py-1.5 pr-3 mono align-top">
+        ${escapeHtml(String(f.value ?? "—"))}
+        ${unread ? '<span class="ml-2 px-1 text-[10px] bg-red-100 text-red-700 rounded">unreadable</span>' : ''}
+      </td>
+      <td class="py-1.5 align-top w-32">
+        <div class="flex items-center gap-2">
+          <div class="flex-1 h-1.5 bg-slate-200 rounded overflow-hidden">
+            <div class="${cls} h-full" style="width:${Math.round(conf*100)}%"></div>
+          </div>
+          <span class="mono text-[11px] text-slate-600">${conf.toFixed(2)}</span>
+        </div>
+      </td>`;
+    row.addEventListener("mouseenter", () => showHover(f.quote));
+    row.addEventListener("mouseleave", () => showHover(""));
+    body.appendChild(row);
+  }
+}
+function showHover(quote) {
+  document.getElementById("hover-quote").textContent = quote ? `highlight: "${(quote||'').slice(0,60)}"` : "";
+}
+
+// ── B · validation ───────────────────────────────────────────────────
+function renderValidation(v) {
+  const ul = document.getElementById("val-list");
+  ul.innerHTML = "";
+  for (const r of v.results) {
+    const color =
+      r.status === "match" ? "#10b981" :
+      r.status === "mismatch" ? "#ef4444" : "#f59e0b";
+    const badge =
+      r.status === "match" ? "bg-emerald-100 text-emerald-700" :
+      r.status === "mismatch" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700";
+    const detail = r.status !== "match"
+      ? `<div class="text-xs text-slate-600 mt-1">
+           found <span class="mono">${escapeHtml(String(r.found))}</span>
+           vs expected <span class="mono">${escapeHtml(String(r.expected))}</span>
+         </div>`
+      : "";
+    const li = document.createElement("li");
+    li.className = "border-l-4 pl-3";
+    li.style.borderColor = color;
+    li.innerHTML = `
+      <div class="flex items-center justify-between">
+        <span class="mono">${r.rule_id}</span>
+        <span class="text-[11px] px-1.5 py-0.5 rounded ${badge}">${r.status} · sev ${r.severity}</span>
+      </div>
+      ${detail}
+      <div class="text-xs text-slate-500 mt-0.5">${escapeHtml(r.reason)}</div>`;
+    ul.appendChild(li);
+  }
+}
+
+// ── C · decision ─────────────────────────────────────────────────────
+function renderDecision(d) {
+  currentDecisionId = d.decision_id || d.doc_id || null;
+  const card = document.getElementById("dec-card");
+  card.classList.remove("hidden");
+  card.className = "rounded shadow p-4 border " + (
+    d.decision === "auto_approve" ? "bg-emerald-50 border-emerald-300 text-emerald-900" :
+    d.decision === "draft_amendment" ? "bg-amber-50 border-amber-300 text-amber-900" :
+    "bg-red-50 border-red-300 text-red-900"
+  );
+  document.getElementById("dec-text").textContent = d.decision;
+  document.getElementById("dec-rationale").textContent = d.rationale || "";
+  const ds = d.discrepancies || [];
+  const dwrap = document.getElementById("dec-discrepancies");
+  const dlist = document.getElementById("dec-list");
+  if (ds.length) {
+    dwrap.classList.remove("hidden");
+    dlist.innerHTML = ds.map(x =>
+      `<li class="mono">${x.field}: <span class="text-red-700">${escapeHtml(String(x.found))}</span>
+         ≠ <span>${escapeHtml(String(x.expected))}</span> · sev ${x.severity}</li>`
+    ).join("");
+  } else {
+    dwrap.classList.add("hidden");
+  }
+  const amend = (d.suggested_action && d.suggested_action.amendment_draft) || null;
+  const ap = document.getElementById("dec-amendment");
+  if (amend) { ap.textContent = amend; ap.classList.remove("hidden"); }
+  else       { ap.classList.add("hidden"); }
+}
+
+// ── override ─────────────────────────────────────────────────────────
+document.getElementById("override-btn").addEventListener("click", async () => {
+  if (!currentDecisionId) return alert("no decision yet");
+  const rat = prompt("Override rationale?");
+  if (!rat) return;
+  const dec = prompt("New decision (auto_approve / human_review / draft_amendment):", "auto_approve");
+  if (!dec) return;
+  const resp = await fetch("/overrides", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      decision_id: currentDecisionId, new_decision: dec, rationale: rat, operator_id: "ops@demo",
+    }),
+  });
+  if (resp.ok) alert("override recorded — see overrides table"); else alert("override failed");
+});
+
+// ── meta line (cost + latency) ───────────────────────────────────────
+function renderMeta(costs) {
+  const total = costs.reduce((a, c) => a + (c.cost_usd || 0), 0);
+  const lat = costs.reduce((a, c) => a + (c.latency_ms || 0), 0);
+  document.getElementById("meta-line").textContent =
+    `cost so far: $${total.toFixed(4)}    latency: ${lat} ms    stages: ${costs.length}`;
+}
+
+// ── D · NL query ─────────────────────────────────────────────────────
+document.getElementById("q-btn").addEventListener("click", runQuery);
+document.getElementById("q-input").addEventListener("keydown", (e) => { if (e.key === "Enter") runQuery(); });
+async function runQuery() {
+  document.getElementById("q-err").classList.add("hidden");
+  document.getElementById("q-result").classList.add("hidden");
+  const q = document.getElementById("q-input").value;
+  const r = await fetch("/query", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ question: q }),
+  });
+  const body = await r.json();
+  if (!r.ok || body.error) {
+    const e = document.getElementById("q-err");
+    e.textContent = body.error || ("HTTP " + r.status);
+    e.classList.remove("hidden");
+    return;
+  }
+  document.getElementById("q-result").classList.remove("hidden");
+  document.getElementById("q-expl").textContent = body.explanation;
+  document.getElementById("q-sql").textContent = body.sql;
+  document.getElementById("q-answer").textContent = body.answer;
+  const thead = document.getElementById("q-thead");
+  const tbody = document.getElementById("q-tbody");
+  thead.innerHTML = "<tr>" + body.columns.map(c => `<th class="text-left pr-2 text-slate-500">${escapeHtml(c)}</th>`).join("") + "</tr>";
+  tbody.innerHTML = body.rows.slice(0, 20).map(row =>
+    "<tr>" + row.map(v => `<td class="pr-2">${escapeHtml(String(v))}</td>`).join("") + "</tr>"
+  ).join("");
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => (
+    {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]
+  ));
+}
+</script>
+</body>
+</html>

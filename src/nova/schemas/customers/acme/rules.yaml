@@ -1,0 +1,96 @@
+# FDE customisation — ACME ruleset, version 1.
+# This is the layer an FDE writes per customer. No code changes.
+
+rule_set_id: acme@v1
+customer_id: acme
+version: 1
+
+# Per-field severity classes used by the router's decision matrix.
+# Higher severity → mismatches escalate to human review rather than auto-amendment.
+severity:
+  consignee_name: high
+  hs_code: high
+  port_of_loading: low
+  port_of_discharge: low
+  incoterms: medium
+  description_of_goods: low
+  gross_weight: medium
+  invoice_number: low
+
+# Rules. Eight, covering: membership, format, presence, range, confidence floor,
+# cross-rule reasoning. The validator dispatches on `type`.
+rules:
+  - id: consignee_in_approved_list
+    type: membership
+    field: consignee_name
+    allowed:
+      - "ACME Pharma Ltd"
+      - "ACME Pharma Limited"
+      - "ACME Pharmaceuticals"
+    case_insensitive: true
+    severity: high
+
+  - id: hs_code_in_approved_list
+    type: membership
+    field: hs_code
+    allowed:
+      - "8471.41"
+      - "8517.62"
+      - "3004.90"
+      - "9018.90"
+    case_insensitive: false
+    severity: high
+
+  - id: incoterms_allowed
+    type: membership
+    field: incoterms
+    allowed:
+      - "FOB"
+      - "CIF"
+      - "CIP"
+      - "DAP"
+    case_insensitive: true
+    extract_first_token: true   # accept "FOB Shenzhen" by taking the leading code
+    severity: medium
+
+  - id: port_of_loading_known
+    type: membership
+    field: port_of_loading
+    allowed:
+      - "Shenzhen"
+      - "Shanghai"
+      - "Ningbo"
+      - "Hong Kong"
+      - "Mumbai"
+    case_insensitive: true
+    severity: low
+
+  - id: port_of_discharge_known
+    type: membership
+    field: port_of_discharge
+    allowed:
+      - "Rotterdam"
+      - "Hamburg"
+      - "Antwerp"
+      - "New York"
+      - "Los Angeles"
+    case_insensitive: true
+    severity: low
+
+  - id: gross_weight_positive_with_unit
+    type: regex
+    field: gross_weight
+    pattern: "^[0-9]+(?:[.,][0-9]+)?\\s*(KG|MT|LBS|kg|mt|lbs)$"
+    severity: medium
+
+  - id: invoice_number_format
+    type: regex
+    field: invoice_number
+    pattern: "^INV-[0-9]{4}-[0-9]{3,5}$"
+    severity: low
+
+  - id: description_not_empty
+    type: presence
+    field: description_of_goods
+    min_length: 8
+    severity: low

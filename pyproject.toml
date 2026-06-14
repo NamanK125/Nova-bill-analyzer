@@ -1,0 +1,67 @@
+[project]
+name = "nova-trade-doc"
+version = "0.1.0"
+description = "Nova trade-document validation — 3-agent pipeline (Extractor → Validator → Router) + queryable store + minimal UI. Built as the plan+execute core of Nova's 5-stage LangGraph pattern."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Naman" }]
+
+dependencies = [
+    # API
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.12",
+    "websockets>=13.0",
+    # Models & validation
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    # LLM transport (OpenAI-compatible → vLLM)
+    "openai>=1.54.0",
+    "tenacity>=9.0.0",
+    # Orchestration
+    "langgraph>=0.2.40",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    # Storage
+    "sqlalchemy>=2.0.35",
+    "aiosqlite>=0.20.0",
+    # Config & data
+    "pyyaml>=6.0.2",
+    # PDF
+    "pdf2image>=1.17.0",
+    "pdfplumber>=0.11.4",
+    "pillow>=10.4.0",
+    "reportlab>=4.2.5",
+    # Observability
+    "structlog>=24.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+]
+
+[project.scripts]
+nova = "nova.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nova"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,40 @@
+# FDE customisation — ACME's decision matrix.
+# Maps validator state → router action. Severity comes from rules.yaml.
+# Evaluated top-down; first match wins.
+
+rule_set_id: acme@v1
+matrix:
+  - when:
+      cost_budget_exceeded: true
+    decision: human_review
+    reason: "Per-shipment cost budget exceeded; defaulting to human review for safety."
+
+  - when:
+      any_uncertain: true
+    decision: human_review
+    reason: "At least one rule is uncertain — never silently approve uncertain results."
+
+  - when:
+      any_mismatch_severity: high
+    decision: human_review
+    reason: "High-severity mismatch (HS code, consignee, value) — human must confirm."
+
+  - when:
+      any_mismatch_severity: medium
+    decision: draft_amendment
+    reason: "Medium-severity mismatch — draft an amendment request for supplier."
+
+  - when:
+      any_mismatch_severity: low
+    decision: draft_amendment
+    reason: "Low-severity mismatch — draft an amendment request."
+
+  - when:
+      min_confidence_below: 0.90
+    decision: human_review
+    reason: "Field confidence below 0.90 floor — human review."
+
+  - when:
+      default: true
+    decision: auto_approve
+    reason: "All rules match and confidences high — auto-approve."
